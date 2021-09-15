@@ -1,0 +1,17 @@
+apiVersion: proxy.open-cluster-management.io/v1alpha1
+kind: ManagedProxyConfiguration
+metadata:
+  name: cluster-proxy
+spec:
+  authentication:
+    agentAuth: {}
+    certificateMounting:
+      secrets: {}
+    certificateSigning:
+      type: SelfSigned
+      selfSigned:
+        rotation: {}
+  proxyServer:
+    image: "ghcr.io/yue9944882/proxy-server-amd64:v0.0.22"
+  proxyAgent:
+    image: "ghcr.io/yue9944882/proxy-agent-amd64:v0.0.22"

@@ -1,0 +1,7 @@
+/apiserver.local.config
+/bin
+/default.etcd
+/kubeconfig
+/config/crds/
+.idea/**
+.DS_Store

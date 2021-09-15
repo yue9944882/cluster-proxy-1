@@ -1,0 +1,20 @@
+# permissions for end users to view managedclusterproxies.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: managedclusterproxy-viewer-role
+rules:
+- apiGroups:
+  - addon.proxy.open-cluster-management.io
+  resources:
+  - managedclusterproxies
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - addon.proxy.open-cluster-management.io
+  resources:
+  - managedclusterproxies/status
+  verbs:
+  - get

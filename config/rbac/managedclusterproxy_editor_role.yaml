@@ -1,0 +1,24 @@
+# permissions for end users to edit managedclusterproxies.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: managedclusterproxy-editor-role
+rules:
+- apiGroups:
+  - addon.proxy.open-cluster-management.io
+  resources:
+  - managedclusterproxies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - addon.proxy.open-cluster-management.io
+  resources:
+  - managedclusterproxies/status
+  verbs:
+  - get
