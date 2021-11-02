@@ -19,8 +19,10 @@ package main
 import (
 	"context"
 	"flag"
+	"github.com/openshift/library-go/pkg/operator/events"
+	"k8s.io/client-go/informers"
+	"open-cluster-management.io/cluster-proxy/pkg/addon/operator/authentication/selfsigned"
 	"os"
-
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -38,9 +40,9 @@ import (
 	addonv1alpha1 "open-cluster-management.io/api/addon/v1alpha1"
 	"open-cluster-management.io/api/client/addon/clientset/versioned"
 	"open-cluster-management.io/api/client/addon/informers/externalversions"
-	proxyv1alpha1 "open-cluster-management.io/cluster-proxy/api/v1alpha1"
 	"open-cluster-management.io/cluster-proxy/controllers"
 	"open-cluster-management.io/cluster-proxy/pkg/addon/agent"
+	proxyv1alpha1 "open-cluster-management.io/cluster-proxy/pkg/apis/proxy/v1alpha1"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -61,12 +63,18 @@ func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
 	var probeAddr string
+	var signerSecretNamespace, signerSecretName string
+
 	klog.SetOutput(os.Stdout)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":58080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":58081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
+	flag.StringVar(&signerSecretNamespace, "signer-secret-namespace", "default",
+		"The namespace of the secret to store the signer CA")
+	flag.StringVar(&signerSecretName, "signer-secret-name", "cluster-proxy-signer",
+		"The name of the secret to store the signer CA")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -93,10 +101,32 @@ func main() {
 		setupLog.Error(err, "unable to set up addon client")
 		os.Exit(1)
 	}
+	nativeClient, err := kubernetes.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		setupLog.Error(err, "unable to set up kubernetes native client")
+		os.Exit(1)
+	}
+
 	informerFactory := externalversions.NewSharedInformerFactory(client, 0)
+	nativeInformer := informers.NewSharedInformerFactory(nativeClient, 0)
+
+	// loading self-signer
+	selfSigner, err := selfsigned.NewSelfSignerFromSecretOrGenerate(
+		nativeClient, signerSecretNamespace, signerSecretName)
+	if err != nil {
+		setupLog.Error(err, "failed loading self-signer")
+		os.Exit(1)
+	}
 
 	if err = (&controllers.ClusterManagementAddonReconciler{
-		Client: mgr.GetClient(),
+		Client:           mgr.GetClient(),
+		SelfSigner:       selfSigner,
+		CAPair:           selfSigner.CA(),
+		SecretGetter:     nativeClient.CoreV1(),
+		SecretLister:     nativeInformer.Core().V1().Secrets().Lister(),
+		ServiceGetter:    nativeClient.CoreV1(),
+		DeploymentGetter: nativeClient.AppsV1(),
+		EventRecorder:    events.NewInMemoryRecorder("ClusterManagementAddonReconciler"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ManagedProxyConfiguration")
 		os.Exit(1)
@@ -117,14 +147,15 @@ func main() {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}
-	nativeClient := kubernetes.NewForConfigOrDie(mgr.GetConfig())
 	addonManager.AddAgent(agent.NewProxyAgent(
 		mgr.GetClient(),
 		nativeClient,
+		selfSigner,
 	))
 
 	ctx, _ := context.WithCancel(ctrl.SetupSignalHandler())
 	informerFactory.Start(ctx.Done())
+	nativeInformer.Start(ctx.Done())
 	addonManager.Start(ctx)
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctx); err != nil {

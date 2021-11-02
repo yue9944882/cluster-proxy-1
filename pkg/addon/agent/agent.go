@@ -2,19 +2,23 @@ package agent
 
 import (
 	"context"
-	"open-cluster-management.io/cluster-proxy/pkg/operator/hub/authentication"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
+	"time"
+
+	"open-cluster-management.io/cluster-proxy/pkg/addon/operator/authentication/selfsigned"
+	proxyv1alpha1 "open-cluster-management.io/cluster-proxy/pkg/apis/proxy/v1alpha1"
+	"open-cluster-management.io/cluster-proxy/pkg/common"
 
 	"open-cluster-management.io/addon-framework/pkg/agent"
 	addonv1alpha1 "open-cluster-management.io/api/addon/v1alpha1"
 	clusterv1 "open-cluster-management.io/api/cluster/v1"
-	proxyv1alpha1 "open-cluster-management.io/cluster-proxy/api/v1alpha1"
-	"open-cluster-management.io/cluster-proxy/pkg/addon/common"
 
 	appsv1 "k8s.io/api/apps/v1"
-	authnv1 "k8s.io/api/authentication/v1"
 	csrv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -24,16 +28,22 @@ import (
 
 var _ agent.AgentAddon = &proxyAgent{}
 
-func NewProxyAgent(runtimeClient client.Client, nativeClient kubernetes.Interface) agent.AgentAddon {
+const (
+	ProxyAgentSignerName = "open-cluster-management.io/proxy-agent-signer"
+)
+
+func NewProxyAgent(runtimeClient client.Client, nativeClient kubernetes.Interface, signer selfsigned.SelfSigner) agent.AgentAddon {
 	return &proxyAgent{
 		runtimeClient: runtimeClient,
 		nativeClient:  nativeClient,
+		selfSigner:    signer,
 	}
 }
 
 type proxyAgent struct {
 	runtimeClient client.Reader
 	nativeClient  kubernetes.Interface
+	selfSigner    selfsigned.SelfSigner
 }
 
 func (p *proxyAgent) Manifests(managedCluster *clusterv1.ManagedCluster, addon *addonv1alpha1.ManagedClusterAddOn) ([]runtime.Object, error) {
@@ -49,14 +59,19 @@ func (p *proxyAgent) Manifests(managedCluster *clusterv1.ManagedCluster, addon *
 	}, config); err != nil {
 		return nil, err
 	}
-
-	secret, err := newAgentSecrets(p.nativeClient, config, addon.Spec.InstallNamespace)
-	if err != nil {
-		return nil, err
+	lbEndpoint := ""
+	if config.Spec.ProxyServer.Entrypoint.Type == proxyv1alpha1.EntryPointTypeLoadBalancerService {
+		if entrySvc, err := p.nativeClient.CoreV1().
+			Services(config.Spec.ProxyServer.Namespace).
+			Get(context.TODO(), config.Spec.ProxyServer.Entrypoint.LoadBalancerService.Name, metav1.GetOptions{}); err == nil {
+			if len(entrySvc.Status.LoadBalancer.Ingress) > 0 {
+				lbEndpoint = entrySvc.Status.LoadBalancer.Ingress[0].IP
+			}
+		}
 	}
 	deploying := []runtime.Object{
-		secret,
-		newAgentDeployment(managedCluster.Name, addon.Spec.InstallNamespace, config),
+		newCASecret(addon.Spec.InstallNamespace, AgentCASecretName, p.selfSigner.CAData()),
+		newAgentDeployment(managedCluster.Name, addon.Spec.InstallNamespace, config, lbEndpoint),
 	}
 	return deploying, nil
 }
@@ -68,7 +83,7 @@ func (p *proxyAgent) GetAgentAddonOptions() agent.AgentAddonOptions {
 			CSRConfigurations: func(cluster *clusterv1.ManagedCluster) []addonv1alpha1.RegistrationConfig {
 				return []addonv1alpha1.RegistrationConfig{
 					{
-						SignerName: csrv1.KubeAPIServerClientSignerName,
+						SignerName: ProxyAgentSignerName,
 						Subject: addonv1alpha1.Subject{
 							User: common.SubjectUserClusterProxyAgent,
 							Groups: []string{
@@ -84,6 +99,54 @@ func (p *proxyAgent) GetAgentAddonOptions() agent.AgentAddonOptions {
 			PermissionConfig: func(cluster *clusterv1.ManagedCluster, addon *addonv1alpha1.ManagedClusterAddOn) error {
 				return nil
 			},
+			CSRSign: func(csr *csrv1.CertificateSigningRequest) []byte {
+				if csr.Spec.SignerName != ProxyAgentSignerName {
+					return nil
+				}
+				b, _ := pem.Decode(csr.Spec.Request)
+				parsed, err := x509.ParseCertificateRequest(b.Bytes)
+				if err != nil {
+					return nil
+				}
+				validity := time.Hour * 24 * 180
+				caCert := p.selfSigner.CA().Config.Certs[0]
+				tmpl := &x509.Certificate{
+					SerialNumber:       caCert.SerialNumber,
+					Subject:            parsed.Subject,
+					DNSNames:           parsed.DNSNames,
+					IPAddresses:        parsed.IPAddresses,
+					EmailAddresses:     parsed.EmailAddresses,
+					URIs:               parsed.URIs,
+					PublicKeyAlgorithm: parsed.PublicKeyAlgorithm,
+					PublicKey:          parsed.PublicKey,
+					Extensions:         parsed.Extensions,
+					ExtraExtensions:    parsed.ExtraExtensions,
+					IsCA:               false,
+					KeyUsage:           x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+					ExtKeyUsage: []x509.ExtKeyUsage{
+						x509.ExtKeyUsageServerAuth,
+						x509.ExtKeyUsageClientAuth,
+					},
+				}
+				now := time.Now()
+				tmpl.NotBefore = now
+				tmpl.NotAfter = now.Add(validity)
+
+				rsaKey := p.selfSigner.CA().Config.Key.(*rsa.PrivateKey)
+				der, err := x509.CreateCertificate(
+					rand.Reader,
+					tmpl,
+					p.selfSigner.CA().Config.Certs[0],
+					parsed.PublicKey,
+					rsaKey)
+				if err != nil {
+					return nil
+				}
+				return pem.EncodeToMemory(&pem.Block{
+					Type:  "CERTIFICATE",
+					Bytes: der,
+				})
+			},
 		},
 	}
 }
@@ -91,62 +154,17 @@ func (p *proxyAgent) GetAgentAddonOptions() agent.AgentAddonOptions {
 const (
 	ApiserverNetworkProxyLabelAddon     = "open-cluster-management.io/addon"
 	ApiserverNetworkProxyLabelComponent = "open-cluster-management.io/component"
+
+	AgentSecretName   = "cluster-proxy-open-cluster-management.io-proxy-agent-signer-client-cert"
+	AgentCASecretName = "cluster-proxy-ca"
 )
 
-func newAgentSecrets(k kubernetes.Interface, config *proxyv1alpha1.ManagedProxyConfiguration, targetNamespace string) (*corev1.Secret, error) {
-	namespace := config.Spec.Authentication.AgentAuth.ServiceAccountNamespace
-	name := config.Spec.Authentication.AgentAuth.ServiceAccountName
-	tr := &authnv1.TokenRequest{
-		Spec: authnv1.TokenRequestSpec{
-			Audiences: []string{
-				config.Spec.Authentication.AgentAuth.ServiceAccountAudience,
-			},
-		},
-	}
-	proxyServerCert, err := k.CoreV1().
-		Secrets(config.Spec.ProxyServer.Namespace).
-		Get(context.TODO(), config.Spec.Authentication.CertificateMounting.Secrets.SigningProxyServerSecretName, metav1.GetOptions{})
-	if err != nil {
-		return nil, err
-	}
-
-	createdTr, err := k.CoreV1().
-		ServiceAccounts(namespace).
-		CreateToken(context.TODO(), name, tr, metav1.CreateOptions{})
-	if err != nil {
-		return nil, err
-	}
-	agentClientSecret := &corev1.Secret{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "v1",
-			Kind:       "Secret",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: targetNamespace,
-			Name:      name,
-		},
-		Data: map[string][]byte{
-			authentication.TLSCACert: proxyServerCert.Data[authentication.TLSCACert],
-			"token":                  []byte(createdTr.Status.Token),
-		},
-	}
-
-	created, err := k.CoreV1().
-		Secrets(targetNamespace).
-		Create(context.TODO(), agentClientSecret, metav1.CreateOptions{})
-	if err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			return agentClientSecret, nil
-		}
-		return nil, err
-	}
-	return created, nil
-}
-
-func newAgentDeployment(clusterName, targetNamespace string, proxyConfig *proxyv1alpha1.ManagedProxyConfiguration) *appsv1.Deployment {
+func newAgentDeployment(clusterName, targetNamespace string, proxyConfig *proxyv1alpha1.ManagedProxyConfiguration, loadBalancerEndpoint string) *appsv1.Deployment {
 	serviceEntryPoint := proxyConfig.Spec.ProxyServer.InClusterServiceName + "." + proxyConfig.Spec.ProxyServer.Namespace
 	if len(proxyConfig.Spec.ProxyAgent.ProxyServerHost) > 0 {
 		serviceEntryPoint = proxyConfig.Spec.ProxyAgent.ProxyServerHost
+	} else if len(loadBalancerEndpoint) > 0 {
+		serviceEntryPoint = loadBalancerEndpoint
 	}
 	return &appsv1.Deployment{
 		TypeMeta: metav1.TypeMeta{
@@ -180,30 +198,60 @@ func newAgentDeployment(clusterName, targetNamespace string, proxyConfig *proxyv
 							Args: []string{
 								"--proxy-server-host=" + serviceEntryPoint,
 								"--agent-identifiers=host=" + clusterName,
-								"--ca-cert=/etc/agent-auth/ca.crt",
-								"--service-account-token-path=/etc/agent-auth/token",
+								"--ca-cert=/etc/ca/ca.crt",
+								"--agent-cert=/etc/tls/tls.crt",
+								"--agent-key=/etc/tls/tls.key",
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
-									Name:      "agent-auth",
+									Name:      "ca",
 									ReadOnly:  true,
-									MountPath: "/etc/agent-auth/",
+									MountPath: "/etc/ca/",
+								},
+								{
+									Name:      "hub",
+									ReadOnly:  true,
+									MountPath: "/etc/tls/",
 								},
 							},
 						},
 					},
 					Volumes: []corev1.Volume{
 						{
-							Name: "agent-auth",
+							Name: "ca",
 							VolumeSource: corev1.VolumeSource{
 								Secret: &corev1.SecretVolumeSource{
-									SecretName: proxyConfig.Spec.Authentication.AgentAuth.ServiceAccountName,
+									SecretName: AgentCASecretName,
+								},
+							},
+						},
+						{
+							Name: "hub",
+							VolumeSource: corev1.VolumeSource{
+								Secret: &corev1.SecretVolumeSource{
+									SecretName: AgentSecretName,
 								},
 							},
 						},
 					},
 				},
 			},
+		},
+	}
+}
+
+func newCASecret(namespace, name string, caData []byte) *corev1.Secret {
+	return &corev1.Secret{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "v1",
+			Kind:       "Secret",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      name,
+		},
+		Data: map[string][]byte{
+			selfsigned.TLSCACert: caData,
 		},
 	}
 }

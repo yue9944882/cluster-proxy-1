@@ -38,10 +38,13 @@ help: ## Display this help.
 ##@ Development
 
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	$(CONTROLLER_GEN) $(CRD_OPTIONS) rbac:roleName=manager-role webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	$(CONTROLLER_GEN) $(CRD_OPTIONS) \
+		paths="./pkg/apis/..." \
+		rbac:roleName=manager-role \
+		output:crd:artifacts:config=hack/crd/bases
 
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
-	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
+	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./pkg/apis/..."
 
 fmt: ## Run go fmt against code.
 	go fmt ./...
@@ -106,3 +109,13 @@ GOBIN=$(PROJECT_DIR)/bin go get $(2) ;\
 rm -rf $$TMP_DIR ;\
 }
 endef
+
+client-gen:
+	go install k8s.io/code-generator/cmd/client-gen@v0.21.2
+	apiserver-runtime-gen \
+ 	--module open-cluster-management.io/cluster-proxy \
+ 	-g client-gen \
+ 	-g informer-gen \
+ 	-g lister-gen \
+ 	--versions=open-cluster-management.io/cluster-proxy/pkg/apis/proxy/v1alpha1 \
+ 	--install-generators=false
