@@ -71,6 +71,7 @@ func (p *proxyAgent) Manifests(managedCluster *clusterv1.ManagedCluster, addon *
 	}
 	deploying := []runtime.Object{
 		newCASecret(addon.Spec.InstallNamespace, AgentCASecretName, p.selfSigner.CAData()),
+		newClusterService(addon.Spec.InstallNamespace, managedCluster.Name),
 		newAgentDeployment(managedCluster.Name, addon.Spec.InstallNamespace, config, lbEndpoint),
 	}
 	return deploying, nil
@@ -252,6 +253,24 @@ func newCASecret(namespace, name string, caData []byte) *corev1.Secret {
 		},
 		Data: map[string][]byte{
 			selfsigned.TLSCACert: caData,
+		},
+	}
+}
+
+func newClusterService(namespace, name string) *corev1.Service {
+	const nativeKubernetesInClusterService = "kubernetes.default.svc.cluster.local"
+	return &corev1.Service{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "v1",
+			Kind:       "Service",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      name,
+		},
+		Spec: corev1.ServiceSpec{
+			Type:         corev1.ServiceTypeExternalName,
+			ExternalName: nativeKubernetesInClusterService,
 		},
 	}
 }
