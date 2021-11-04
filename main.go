@@ -19,16 +19,15 @@ package main
 import (
 	"context"
 	"flag"
-	"github.com/openshift/library-go/pkg/operator/events"
-	"k8s.io/client-go/informers"
-	"open-cluster-management.io/cluster-proxy/pkg/addon/operator/authentication/selfsigned"
 	"os"
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	"github.com/openshift/library-go/pkg/operator/events"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/klog/v2"
@@ -42,6 +41,7 @@ import (
 	"open-cluster-management.io/api/client/addon/informers/externalversions"
 	"open-cluster-management.io/cluster-proxy/controllers"
 	"open-cluster-management.io/cluster-proxy/pkg/addon/agent"
+	"open-cluster-management.io/cluster-proxy/pkg/addon/operator/authentication/selfsigned"
 	proxyv1alpha1 "open-cluster-management.io/cluster-proxy/pkg/apis/proxy/v1alpha1"
 	//+kubebuilder:scaffold:imports
 )
@@ -89,7 +89,7 @@ func main() {
 		Port:                   9443,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "4b0f58f0.proxy.open-cluster-management.io",
+		LeaderElectionID:       "cluster-proxy-addon-manager",
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -153,7 +153,8 @@ func main() {
 		selfSigner,
 	))
 
-	ctx, _ := context.WithCancel(ctrl.SetupSignalHandler())
+	ctx, cancel := context.WithCancel(ctrl.SetupSignalHandler())
+	defer cancel()
 	informerFactory.Start(ctx.Done())
 	nativeInformer.Start(ctx.Done())
 	addonManager.Start(ctx)

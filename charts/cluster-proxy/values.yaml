@@ -1,0 +1,12 @@
+# Image of the cluster-gateway instances
+image: registry-vpc.cn-beijing.aliyuncs.com/open_cluster_management/cluster-proxy:v0.0.0
+
+# Number of replicas
+replicas: 3
+
+spokeAddonNamespace: "open-cluster-management-cluster-proxy"
+
+targetCluster: vela-dev
+
+proxyServerImage: registry-vpc.cn-beijing.aliyuncs.com/open_cluster_management/proxy-server-amd64:v0.0.22
+proxyAgentImage: registry-vpc.cn-beijing.aliyuncs.com/open_cluster_management/proxy-agent-amd64:v0.0.22

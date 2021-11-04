@@ -114,7 +114,7 @@ func (c *ClusterManagementAddonReconciler) Reconcile(ctx context.Context, reques
 	// ensure proxy-server cert rotation.
 	// at an interval of 10 hrs which is the default resync period of controller-runtime's informer.
 	if err := c.ensureRotation(config, entrypoint); err != nil {
-		return reconcile.Result{}, errors.Wrapf(err, "failed to rotate proxy-server certificate")
+		return reconcile.Result{}, errors.Wrapf(err, "failed to rotate certificate")
 	}
 
 	// deploying central proxy server instances into the hub cluster.
