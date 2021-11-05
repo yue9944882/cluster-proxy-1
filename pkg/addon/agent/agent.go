@@ -198,7 +198,7 @@ func newAgentDeployment(clusterName, targetNamespace string, proxyConfig *proxyv
 							Image: proxyConfig.Spec.ProxyAgent.Image,
 							Args: []string{
 								"--proxy-server-host=" + serviceEntryPoint,
-								"--agent-identifiers=host=" + clusterName,
+								"--agent-identifiers=host=" + clusterName + "&" + "host=" + clusterName + "." + targetNamespace,
 								"--ca-cert=/etc/ca/ca.crt",
 								"--agent-cert=/etc/tls/tls.crt",
 								"--agent-key=/etc/tls/tls.key",
