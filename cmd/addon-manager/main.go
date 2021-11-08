@@ -43,6 +43,7 @@ import (
 	"open-cluster-management.io/cluster-proxy/pkg/addon/agent"
 	"open-cluster-management.io/cluster-proxy/pkg/addon/operator/authentication/selfsigned"
 	proxyv1alpha1 "open-cluster-management.io/cluster-proxy/pkg/apis/proxy/v1alpha1"
+	"open-cluster-management.io/cluster-proxy/pkg/config"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -75,11 +76,18 @@ func main() {
 		"The namespace of the secret to store the signer CA")
 	flag.StringVar(&signerSecretName, "signer-secret-name", "cluster-proxy-signer",
 		"The name of the secret to store the signer CA")
+	flag.StringVar(&config.AgentImageName, "agent-image-name",
+		config.AgentImageName,
+		"The name of the addon agent's image")
 	opts := zap.Options{
 		Development: true,
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
+	if err := config.ValidateAgentImage(); err != nil {
+		setupLog.Error(err, "failed to validate agent image name")
+		os.Exit(1)
+	}
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
@@ -108,7 +116,7 @@ func main() {
 	}
 
 	informerFactory := externalversions.NewSharedInformerFactory(client, 0)
-	nativeInformer := informers.NewSharedInformerFactory(nativeClient, 0)
+	nativeInformer := informers.NewSharedInformerFactoryWithOptions(nativeClient, 0)
 
 	// loading self-signer
 	selfSigner, err := selfsigned.NewSelfSignerFromSecretOrGenerate(
@@ -155,9 +163,9 @@ func main() {
 
 	ctx, cancel := context.WithCancel(ctrl.SetupSignalHandler())
 	defer cancel()
-	informerFactory.Start(ctx.Done())
-	nativeInformer.Start(ctx.Done())
-	addonManager.Start(ctx)
+	go informerFactory.Start(ctx.Done())
+	go nativeInformer.Start(ctx.Done())
+	go addonManager.Start(ctx)
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "problem running manager")

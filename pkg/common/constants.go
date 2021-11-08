@@ -21,10 +21,11 @@ var (
 )
 
 const (
+	SubjectGroupClusterProxy      = "open-cluster-management:cluster-proxy"
 	SubjectUserClusterProxyAgent  = "open-cluster-management:cluster-proxy:proxy-agent"
 	SubjectUserClusterProxyServer = "open-cluster-management:cluster-proxy:proxy-server"
 	SubjectUserClusterAgentServer = "open-cluster-management:cluster-proxy:agent-server"
-	SubjectGroupClusterProxy      = "open-cluster-management:cluster-proxy"
+	SubjectUserClusterAddonAgent  = "open-cluster-management:cluster-proxy:addon-agent"
 )
 
 const (

@@ -1,6 +1,10 @@
 
 # Image URL to use all building/pushing image targets
 IMG ?= controller:latest
+IMAGE_REGISTRY_NAME ?= localhost
+AGENT_IMAGE_NAME ?= cluster-proxy-addon-agent
+MANAGER_IMAGE_NAME ?= cluster-proxy-addon-manager
+IMAGE_TAG ?= $(shell git rev-parse --short HEAD)
 # Produce CRDs that work back to Kubernetes 1.11 (no version conversion)
 CRD_OPTIONS ?= "crd:trivialVersions=true,preserveUnknownFields=false"
 
@@ -119,3 +123,17 @@ client-gen:
  	-g lister-gen \
  	--versions=open-cluster-management.io/cluster-proxy/pkg/apis/proxy/v1alpha1 \
  	--install-generators=false
+
+
+addon-agent-image:
+	docker build \
+			-f cmd/addon-agent/Dockerfile \
+			-t $(IMAGE_REGISTRY_NAME)/$(AGENT_IMAGE_NAME):$(IMAGE_TAG) .
+
+addon-manager-image:
+	docker build \
+		-f cmd/addon-manager/Dockerfile \
+		--build-arg ADDON_AGENT_IMAGE_NAME=$(IMAGE_REGISTRY_NAME)/$(AGENT_IMAGE_NAME):$(IMAGE_TAG) \
+		-t $(IMAGE_REGISTRY_NAME)/$(MANAGER_IMAGE_NAME):$(IMAGE_TAG) .
+
+images: addon-manager-image addon-agent-image

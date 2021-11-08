@@ -1,12 +1,12 @@
 # Image of the cluster-gateway instances
-image: registry-vpc.cn-beijing.aliyuncs.com/open_cluster_management/cluster-proxy:v0.0.0
+image: yue9944882/cluster-proxy-addon-manager:v0.0.7
 
 # Number of replicas
 replicas: 3
 
 spokeAddonNamespace: "open-cluster-management-cluster-proxy"
 
-targetCluster: vela-dev
+# targetCluster: test-cluster (render it manually via `helm template -f..`)
 
-proxyServerImage: registry-vpc.cn-beijing.aliyuncs.com/open_cluster_management/proxy-server-amd64:v0.0.22
-proxyAgentImage: registry-vpc.cn-beijing.aliyuncs.com/open_cluster_management/proxy-agent-amd64:v0.0.22
+proxyServerImage: yue9944882/proxy-server-amd64:v0.0.22
+proxyAgentImage: yue9944882/proxy-agent-amd64:v0.0.22

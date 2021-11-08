@@ -15,13 +15,16 @@ import (
 	"open-cluster-management.io/addon-framework/pkg/agent"
 	addonv1alpha1 "open-cluster-management.io/api/addon/v1alpha1"
 	clusterv1 "open-cluster-management.io/api/cluster/v1"
+	"open-cluster-management.io/cluster-proxy/pkg/config"
 
 	appsv1 "k8s.io/api/apps/v1"
 	csrv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	applyrbacv1 "k8s.io/client-go/applyconfigurations/rbac/v1"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -92,14 +95,21 @@ func (p *proxyAgent) GetAgentAddonOptions() agent.AgentAddonOptions {
 							},
 						},
 					},
+					{
+						SignerName: csrv1.KubeAPIServerClientSignerName,
+						Subject: addonv1alpha1.Subject{
+							User: common.SubjectUserClusterAddonAgent,
+							Groups: []string{
+								common.SubjectGroupClusterProxy,
+							},
+						},
+					},
 				}
 			},
 			CSRApproveCheck: func(cluster *clusterv1.ManagedCluster, addon *addonv1alpha1.ManagedClusterAddOn, csr *csrv1.CertificateSigningRequest) bool {
 				return cluster.Spec.HubAcceptsClient
 			},
-			PermissionConfig: func(cluster *clusterv1.ManagedCluster, addon *addonv1alpha1.ManagedClusterAddOn) error {
-				return nil
-			},
+			PermissionConfig: p.setupPermission,
 			CSRSign: func(csr *csrv1.CertificateSigningRequest) []byte {
 				if csr.Spec.SignerName != ProxyAgentSignerName {
 					return nil
@@ -152,6 +162,45 @@ func (p *proxyAgent) GetAgentAddonOptions() agent.AgentAddonOptions {
 	}
 }
 
+func (p *proxyAgent) setupPermission(cluster *clusterv1.ManagedCluster, addon *addonv1alpha1.ManagedClusterAddOn) error {
+	namespace := cluster.Name
+
+	role := applyrbacv1.Role("cluster-proxy-addon-agent", namespace).
+		WithRules(applyrbacv1.PolicyRule().
+			WithAPIGroups("coordination.k8s.io").
+			WithVerbs("*").
+			WithResources("leases"))
+	if _, err := p.nativeClient.RbacV1().
+		Roles(namespace).
+		Apply(
+			context.TODO(),
+			role,
+			metav1.ApplyOptions{
+				FieldManager: "addon-manager",
+			}); err != nil {
+		return err
+	}
+
+	rolebinding := applyrbacv1.RoleBinding("cluster-proxy-addon-agent", namespace).
+		WithRoleRef(applyrbacv1.RoleRef().
+			WithKind("Role").
+			WithName("cluster-proxy-addon-agent")).
+		WithSubjects(applyrbacv1.Subject().
+			WithKind(rbacv1.GroupKind).
+			WithName(common.SubjectGroupClusterProxy))
+	if _, err := p.nativeClient.RbacV1().
+		RoleBindings(namespace).
+		Apply(
+			context.TODO(),
+			rolebinding,
+			metav1.ApplyOptions{
+				FieldManager: "addon-manager",
+			}); err != nil {
+		return err
+	}
+	return nil
+}
+
 const (
 	ApiserverNetworkProxyLabelAddon     = "open-cluster-management.io/addon"
 	ApiserverNetworkProxyLabelComponent = "open-cluster-management.io/component"
@@ -198,7 +247,10 @@ func newAgentDeployment(clusterName, targetNamespace string, proxyConfig *proxyv
 							Image: proxyConfig.Spec.ProxyAgent.Image,
 							Args: []string{
 								"--proxy-server-host=" + serviceEntryPoint,
-								"--agent-identifiers=host=" + clusterName + "&" + "host=" + clusterName + "." + targetNamespace,
+								"--agent-identifiers=" +
+									"host=" + clusterName + "&" +
+									"host=" + clusterName + "." + targetNamespace + "&" +
+									"host=" + clusterName + "." + targetNamespace + ".svc.cluster.local",
 								"--ca-cert=/etc/ca/ca.crt",
 								"--agent-cert=/etc/tls/tls.crt",
 								"--agent-key=/etc/tls/tls.key",
@@ -213,6 +265,21 @@ func newAgentDeployment(clusterName, targetNamespace string, proxyConfig *proxyv
 									Name:      "hub",
 									ReadOnly:  true,
 									MountPath: "/etc/tls/",
+								},
+							},
+						},
+						{
+							Name:  "addon-agent",
+							Image: config.AgentImageName,
+							Args: []string{
+								"--hub-kubeconfig=/etc/kubeconfig/kubeconfig",
+								"--cluster-name=" + clusterName,
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									Name:      "hub-kubeconfig",
+									ReadOnly:  true,
+									MountPath: "/etc/kubeconfig/",
 								},
 							},
 						},
@@ -231,6 +298,14 @@ func newAgentDeployment(clusterName, targetNamespace string, proxyConfig *proxyv
 							VolumeSource: corev1.VolumeSource{
 								Secret: &corev1.SecretVolumeSource{
 									SecretName: AgentSecretName,
+								},
+							},
+						},
+						{
+							Name: "hub-kubeconfig",
+							VolumeSource: corev1.VolumeSource{
+								Secret: &corev1.SecretVolumeSource{
+									SecretName: "cluster-proxy-hub-kubeconfig",
 								},
 							},
 						},

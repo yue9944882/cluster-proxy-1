@@ -54,22 +54,13 @@ rules:
     verbs:
       - "*"
     resourceNames:
-      - "open-cluster-management.io/proxy-agent-signer"
+      - open-cluster-management.io/proxy-agent-signer
+      - kubernetes.io/kube-apiserver-client
   - apiGroups:
       - ""
     resources:
-      - services
       - namespaces
       - secrets
-      - events
-      - serviceaccounts
-    verbs:
-      - "*"
-  - apiGroups:
-      - "apps"
-    resources:
-      - deployments
-      - deployments/scale
     verbs:
       - "*"
   - apiGroups:
@@ -92,24 +83,6 @@ rules:
       - get
       - list
       - watch
-      - create
-      - update
-      - patch
-  - apiGroups:
-      - ""
-    resources:
-      - configmaps
-    verbs:
-      - get
-      - create
-      - update
-      - patch
-  - apiGroups:
-      - coordination.k8s.io
-    resources:
-      - leases
-    verbs:
-      - get
       - create
       - update
       - patch
